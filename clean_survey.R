@@ -1,3 +1,14 @@
+# ------------------------------------------------------------------------------
+#                                   NOTE
+#                                2023-05-07
+# ------------------------------------------------------------------------------
+# I wrote all this in 2017 in the early days of the tidyverse and before I
+# switched to using _ as a delimiter in variable names (instead of .). Rather
+# than rewrite everything here to be more efficient and clean, I made the bare
+# minimum amount of changes to get it all working with tidyverse v2.0 and R 4.3
+# ------------------------------------------------------------------------------
+
+
 library(tidyverse)
 library(magrittr)
 library(stringi)
