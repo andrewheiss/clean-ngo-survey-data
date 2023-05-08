@@ -2,12 +2,11 @@ library(dplyr)        # For magic dataframe manipulation
 library(tidyr)        # For more magic dataframe manipulation
 library(countrycode)  # Standardize countries
 library(rvest)        # Scrape stuff from the web
-library(pander)       # Markdown
 
 # World Bank countries
 wb.countries.raw <- read_html("https://web.archive.org/web/20160422022535/http://data.worldbank.org/country/") %>%
   html_nodes(xpath='//*[@id="block-views-countries-block_1"]/div/div/div/table') %>%
-  html_table() %>% bind_rows() %>% as_data_frame()
+  html_table() %>% bind_rows() %>% as_tibble()
 wb.countries.raw
 
 # Clean up list of countries and add standard codes
@@ -21,19 +20,6 @@ wb.countries.clean <- wb.countries.raw %>%
   mutate(`Qualtrics ID` = 1:n())
 wb.countries.clean
 
-# Nice Markdown table
-pandoc.table.return(wb.countries.clean, justify="lccc") %>%
-  cat(., file=file.path(PROJHOME, "Data", "Survey", "output", "survey_countries.md"))
-
-# Regex for question validation
-gsub("\\.", "\\\\.", paste(wb.countries.clean$`Country name`, collapse="|")) %>%
-  cat(., file=file.path(PROJHOME, "Data", "Survey", "output", "survey_regex.txt"))
-
-# Plain text list of countries for Qualtrics
-cat(paste0(wb.countries.clean$`Country name`, collapse="\n"),
-    file=file.path(PROJHOME, "Data", "Survey", "output", "survey_countries.txt"))
-
-# Save as RDS
 saveRDS(wb.countries.clean,
-        file.path(PROJHOME, "Data", "Survey", "output",
-                  "survey_countries.rds"))
+        here::here("data", "data_processed",
+                   "survey_countries.rds"))
