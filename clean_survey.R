@@ -10,6 +10,7 @@
 
 
 library(tidyverse)
+library(RSQLite)
 library(magrittr)
 library(stringi)
 library(stringr)
@@ -26,7 +27,7 @@ is.empty.loop <- function(row.to.check) {
   questions.answered <- row.to.check %>%
     select(starts_with("Q4")) %>%
     # Force everything to boolean; FALSE = missing value
-    mutate_each(funs(!is.na(.))) %>%
+    mutate_each(list(~!is.na(.))) %>%
     # Total number of questions answered in loop
     mutate(questions.answered = rowSums(.))
   
@@ -53,8 +54,9 @@ match_collapse <- function(x) {
 }
 
 # Load data from tracking database to get data on database provenance
-db.email <- src_sqlite(path=file.path(PROJHOME, "Data", "Survey", "list", 
-                                      "final_list.db"))
+db.email <- dbConnect(RSQLite::SQLite(), 
+                      here::here("data", "data_raw", "final_list.db"),
+                      flags = SQLITE_RO)
 
 dbs <- tbl(db.email, "full_list") %>% collect() %>%
   separate(id_org, c("database", "id.in.db")) %>%
@@ -68,20 +70,21 @@ completed <- tbl(db.email, "survey_completed") %>% collect() %>%
   slice(1) %>%
   ungroup()
 
+dbDisconnect(db.email)
 
 # Look up a list of Qualtrics country IDs and return a list of clean country
 # names, ISO3 codes, or COW codes
-countries.raw <- readRDS(file.path(PROJHOME, "Data", "Survey", "output",
-                                   "survey_countries.rds"))
+countries.raw <- readRDS(here::here("data", "data_processed",
+                                    "survey_countries.rds"))
 
 # Change Greenland > Anguilla; Aruba > Kosovo; Cayman Islands > Taiwan
-countries.manual.fixes <- data_frame(`Country name` = c("Anguilla", 
-                                                        "Kosovo", "Taiwan",
-                                                        "Hong Kong SAR, China",
-                                                        "Serbia", "West Bank and Gaza"),
-                                     ISO3 = c("AIA", "XKX", "TWN", "HKG", "SRB", "PSE"),
-                                     `COW code` = c(1022, 347, 713, 715, 340, 669),
-                                     `Qualtrics ID` = c(74, 10, 36, 83, 163, 209))
+countries.manual.fixes <- tibble(`Country name` = c("Anguilla", 
+                                                    "Kosovo", "Taiwan",
+                                                    "Hong Kong SAR, China",
+                                                    "Serbia", "West Bank and Gaza"),
+                                 ISO3 = c("AIA", "XKX", "TWN", "HKG", "SRB", "PSE"),
+                                 `COW code` = c(1022, 347, 713, 715, 340, 669),
+                                 `Qualtrics ID` = c(74, 10, 36, 83, 163, 209))
 
 countries <- countries.raw %>%
   filter(!(`Qualtrics ID` %in% countries.manual.fixes$`Qualtrics ID`)) %>%
@@ -92,7 +95,7 @@ match_country_id <- function(x, id="name") {
     stop("Invalid 'id'")
   }
   
-  df <- data_frame(`Qualtrics ID` = as.numeric(x)) %>%
+  df <- tibble(`Qualtrics ID` = as.numeric(x)) %>%
     left_join(rename(countries, country_name = `Country name`, 
                      iso3 = ISO3, cow = `COW code`),
               by="Qualtrics ID")
@@ -217,13 +220,13 @@ stop.continue <- c("Answer questions about another country",
 # -----------------------------
 # ----------------------------------------------------------
 # Load raw data
-survey.v1 <- read_qualtrics(file.path(PROJHOME, "Data", "Survey", "raw_data", 
+survey.v1 <- read_qualtrics(here::here("data", "data_raw", 
                                       "INGOs_and_government_regulations.csv"),
-                            file.path(PROJHOME, "Data", "Survey", "raw_data", 
+                            here::here("data", "data_raw", 
                                       "v1cols.csv"))
-survey.v2 <- read_qualtrics(file.path(PROJHOME, "Data", "Survey", "raw_data", 
+survey.v2 <- read_qualtrics(here::here("data", "data_raw", 
                                       "INGOs_and_government_regulations_new.csv"),
-                            file.path(PROJHOME, "Data", "Survey", "raw_data", 
+                            here::here("data", "data_raw", 
                                       "v2cols.csv")) %>%
   filter(!(ResponseID %in% c("R_12564WimpZZKn5A", "R_3kwdyUr7vHd8qiE")))
 
@@ -272,7 +275,7 @@ survey.v1.orgs <- survey.v1 %>%
          Q3.3_mobilize_TEXT = Q3.3zzz3_3_1_TEXT, Q3.3_advocacy_TEXT = Q3.3zzz3_4_1_TEXT,
          Q3.3_monitor_TEXT = Q3.3zzz3_5_1_TEXT) %>%
   # Increment the "_dk" columns by 5 so they're on the same scale
-  mutate_each(funs(. + 5), matches("Q3\\.3_.+_dk")) %>%
+  mutate_each(list(~. + 5), matches("Q3\\.3_.+_dk")) %>%
   # If they marked something in a "_dk" column, use it
   mutate(Q3.3_aid = ifelse(!is.na(Q3.3_aid_dk), 
                            Q3.3_aid_dk, Q3.3_aid),
@@ -285,13 +288,13 @@ survey.v1.orgs <- survey.v1 %>%
          Q3.3_monitor = ifelse(!is.na(Q3.3_monitor_dk), 
                                Q3.3_monitor_dk, Q3.3_monitor)) %>%
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 7, .)),
+  mutate_each(list(~ifelse(is.na(.), 7, .)),
               c(Q3.3_aid, Q3.3_education, Q3.3_mobilize, 
                 Q3.3_advocacy, Q3.3_monitor)) %>%
   # Get rid of don't know columns
   select(-matches("Q3\\.3_.+_dk")) %>%
   # Convert answers to factors
-  mutate_each(funs(factor(., levels=1:7, labels=always.never.dk)),
+  mutate_each(list(~factor(., levels=1:7, labels=always.never.dk)),
               c(Q3.3_aid, Q3.3_education, Q3.3_mobilize, 
                 Q3.3_advocacy, Q3.3_monitor)) %>%
   unite(Q3.6, starts_with("Q3.6_"), -Q3.6_5_TEXT, sep=",") %>%
@@ -306,7 +309,7 @@ survey.v1.orgs <- survey.v1 %>%
          Q3.8_host_govt_dk = Q3.8zzz2_5, Q3.8_other_dk = Q3.8zzz2_6,
          Q3.8_other_TEXT = Q3.8zzz1_6_TEXT) %>%
   # Increment the "_dk" columns by 5 so they're on the same scale
-  mutate_each(funs(. + 5), matches("Q3\\.8_.+_dk")) %>%
+  mutate_each(list(~. + 5), matches("Q3\\.8_.+_dk")) %>%
   # If they marked something in a "_dk" column, use it
   mutate(Q3.8_individual = ifelse(!is.na(Q3.8_individual_dk), 
                                   Q3.8_individual_dk, Q3.8_individual),
@@ -321,13 +324,13 @@ survey.v1.orgs <- survey.v1 %>%
          Q3.8_other = ifelse(!is.na(Q3.8_other_dk), 
                              Q3.8_other_dk, Q3.8_other)) %>%
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 7, .)),
+  mutate_each(list(~ ifelse(is.na(.), 7, .)),
               c(Q3.8_individual, Q3.8_corporate, Q3.8_foundation, 
                 Q3.8_home_govt, Q3.8_host_govt, Q3.8_other)) %>%
   # Get rid of don't know columns
   select(-matches("Q3\\.8_.+_dk"), -Q3.8zzz2_6_TEXT) %>%
   # Convert answers to factors
-  mutate_each(funs(factor(., levels=1:7, labels=great.none.dk)),
+  mutate_each(list(~ factor(., levels=1:7, labels=great.none.dk)),
               c(Q3.8_individual, Q3.8_corporate, Q3.8_foundation, 
                 Q3.8_home_govt, Q3.8_host_govt, Q3.8_other)) %>%
   #
@@ -374,11 +377,11 @@ survey.v2.orgs <- survey.v2 %>%
          Q3.3_mobilize_TEXT = Q3.3zzz2_3_1_TEXT, Q3.3_advocacy_TEXT = Q3.3zzz2_4_1_TEXT,
          Q3.3_monitor_TEXT = Q3.3zzz2_5_1_TEXT) %>%
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 7, .)),
+  mutate_each(list(~ifelse(is.na(.), 7, .)),
               c(Q3.3_aid, Q3.3_education, Q3.3_mobilize, 
                 Q3.3_advocacy, Q3.3_monitor)) %>%
   # Convert answers to factors
-  mutate_each(funs(factor(., levels=1:7, labels=always.never.dk)),
+  mutate_each(list(~factor(., levels=1:7, labels=always.never.dk)),
               c(Q3.3_aid, Q3.3_education, Q3.3_mobilize, 
                 Q3.3_advocacy, Q3.3_monitor)) %>%
   unite(Q3.6, starts_with("Q3.6_"), -Q3.6_5_TEXT, sep=",") %>%
@@ -392,10 +395,10 @@ survey.v2.orgs <- survey.v2 %>%
   # For whatever reason, the levels in Q3.8* aren't continuous; they include 
   # (1, 3-8) and skip 2
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 8, .)),
+  mutate_each(list(~ifelse(is.na(.), 8, .)),
               c(Q3.8_individual, Q3.8_corporate, Q3.8_foundation, 
                 Q3.8_home_govt, Q3.8_host_govt, Q3.8_other)) %>%
-  mutate_each(funs(factor(., levels=c(1, 3:8), labels=great.none.dk)),
+  mutate_each(list(~factor(., levels=c(1, 3:8), labels=great.none.dk)),
               c(Q3.8_individual, Q3.8_corporate, Q3.8_foundation, 
                 Q3.8_home_govt, Q3.8_host_govt, Q3.8_other)) %>%
   #
@@ -462,7 +465,7 @@ survey.v1.countries <- survey.v1 %>%
          Q4.16_speech_TEXT = Q4.16zzz3_3_1_TEXT, Q4.16_communications_TEXT = Q4.16zzz3_4_1_TEXT,
          Q4.16_assembly_TEXT = Q4.16zzz3_5_1_TEXT, Q4.16_resources_TEXT = Q4.16zzz3_6_1_TEXT) %>%
   # Increment the "_dk" columns by 5 so they're on the same scale
-  mutate_each(funs(as.numeric(.) + 5), matches("Q4\\.16_.+_dk")) %>%
+  mutate_each(list(~as.numeric(.) + 5), matches("Q4\\.16_.+_dk")) %>%
   # If they marked something in a "_dk" column, use it
   mutate(Q4.16_registration = ifelse(!is.na(Q4.16_registration_dk), 
                                      Q4.16_registration_dk, Q4.16_registration),
@@ -477,12 +480,12 @@ survey.v1.countries <- survey.v1 %>%
          Q4.16_resources = ifelse(!is.na(Q4.16_resources_dk), 
                                   Q4.16_resources_dk, Q4.16_resources)) %>%
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 7, .)),
+  mutate_each(list(~ifelse(is.na(.), 7, .)),
               c(Q4.16_registration, Q4.16_operations, Q4.16_speech,
                 Q4.16_communications, Q4.16_assembly, Q4.16_resources)) %>%
   # Get rid of don't know columns
   select(-matches("Q4\\.16_.+_dk")) %>%
-  mutate_each(funs(factor(., levels=1:7, labels=great.none.dk)),
+  mutate_each(list(~factor(., levels=1:7, labels=great.none.dk)),
               c(Q4.16_registration, Q4.16_operations, Q4.16_speech, 
                 Q4.16_communications, Q4.16_assembly, Q4.16_resources)) %>%
   mutate(Q4.17 = factor(Q4.17, levels=1:6, labels=restricted),
@@ -504,7 +507,7 @@ survey.v1.countries <- survey.v1 %>%
          Q4.21_local_staff_TEXT = Q4.21zzz3_7_1_TEXT,
          Q4.21_foreign_staff_TEXT = Q4.21zzz3_8_1_TEXT) %>%
   # Increment the "_dk" columns by 2 so they're on the same scale
-  mutate_each(funs(as.numeric(.) + 2), matches("Q4\\.21_.+_dk")) %>%
+  mutate_each(list(~as.numeric(.) + 2), matches("Q4\\.21_.+_dk")) %>%
   # If they marked something in a "_dk" column, use it
   mutate(Q4.21_funding = ifelse(!is.na(Q4.21_funding_dk), 
                                 Q4.21_funding_dk, Q4.21_funding),
@@ -523,13 +526,13 @@ survey.v1.countries <- survey.v1 %>%
          Q4.21_foreign_staff = ifelse(!is.na(Q4.21_foreign_staff_dk), 
                                       Q4.21_foreign_staff_dk, Q4.21_foreign_staff)) %>%
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 4, .)),
+  mutate_each(list(~ifelse(is.na(.), 4, .)),
               c(Q4.21_funding, Q4.21_issues, Q4.21_comm_govt, 
                 Q4.21_comm_donors, Q4.21_locations, Q4.21_country_office,
                 Q4.21_local_staff, Q4.21_foreign_staff)) %>%
   # Get rid of don't know columns
   select(-matches("Q4\\.21_.+_dk")) %>%
-  mutate_each(funs(factor(., levels=1:4, labels=yndk.na)),
+  mutate_each(list(~factor(., levels=1:4, labels=yndk.na)),
               c(Q4.21_funding, Q4.21_issues, Q4.21_comm_govt, 
                 Q4.21_comm_donors, Q4.21_locations, Q4.21_country_office,
                 Q4.21_local_staff, Q4.21_foreign_staff)) %>%
@@ -592,10 +595,10 @@ survey.v2.countries <- survey.v2 %>%
   # Assume that missing values = not applicable
   # For whatever reason, the levels in Q4.16* aren't continuous; they include 
   # (1, 3-8) and skip 2
-  mutate_each(funs(ifelse(is.na(.), 8, .)),
+  mutate_each(list(~ifelse(is.na(.), 8, .)),
               c(Q4.16_registration, Q4.16_operations, Q4.16_speech,
                 Q4.16_communications, Q4.16_assembly, Q4.16_resources)) %>%
-  mutate_each(funs(factor(., levels=c(1, 3:8), labels=great.none.dk)),
+  mutate_each(list(~factor(., levels=c(1, 3:8), labels=great.none.dk)),
               c(Q4.16_registration, Q4.16_operations, Q4.16_speech, 
                 Q4.16_communications, Q4.16_assembly, Q4.16_resources)) %>%
   mutate(Q4.17 = factor(Q4.17, levels=1:6, labels=restricted),
@@ -610,11 +613,11 @@ survey.v2.countries <- survey.v2 %>%
          Q4.21_local_staff_TEXT = Q4.21g, Q4.21_foreign_staff_TEXT = Q4.21h) %>%
   # Same here. Q4.21* is missing 2 as a level
   # Assume that missing values = not applicable
-  mutate_each(funs(ifelse(is.na(.), 5, .)),
+  mutate_each(list(~ifelse(is.na(.), 5, .)),
               c(Q4.21_funding, Q4.21_issues, Q4.21_comm_govt, 
                 Q4.21_comm_donors, Q4.21_locations, Q4.21_country_office,
                 Q4.21_local_staff, Q4.21_foreign_staff)) %>%
-  mutate_each(funs(factor(., levels=c(1, 3:5), labels=yndk.na)),
+  mutate_each(list(~factor(., levels=c(1, 3:5), labels=yndk.na)),
               c(Q4.21_funding, Q4.21_issues, Q4.21_comm_govt, 
                 Q4.21_comm_donors, Q4.21_locations, Q4.21_country_office,
                 Q4.21_local_staff, Q4.21_foreign_staff)) %>%
@@ -719,9 +722,9 @@ survey.orgs.clean.final %>%
   select(ResponseID, Q2.1, Q2.2_country, Q3.1_other_TEXT) %>%
   mutate(Q3.2.manual = "") %>%
   arrange(Q3.1_other_TEXT) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
-                      "handcoded_survey_stuff",
-                      "other_issues_WILL_BE_OVERWRITTEN.csv"))
+  write_csv(here::here("data", "data_processed",
+                       "handcoded_survey_stuff",
+                       "other_issues_WILL_BE_OVERWRITTEN.csv"))
 
 # A handful of organizations left the issue area blank, but that's easiliy
 # imputable based on websites and Q3.1
@@ -729,19 +732,19 @@ survey.orgs.clean.final %>%
   filter(is.na(Q3.1_other_TEXT) & (Q3.2 == "Other" | is.na(Q3.2))) %>%
   select(ResponseID, Q2.1, Q2.2_country, Q3.1_value) %>%
   mutate(Q3.2.manual = "", Q3.1_value = paste(Q3.1_value)) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
-                      "handcoded_survey_stuff",
-                      "missing_issues_WILL_BE_OVERWRITTEN.csv"))
+  write_csv(here::here("data", "data_processed",
+                       "handcoded_survey_stuff",
+                       "missing_issues_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSVs
-other.issues.raw <- read_csv(file.path(PROJHOME, "Data", "data_processed",
-                                       "handcoded_survey_stuff",
-                                       "other_issues.csv")) %>%
+other.issues.raw <- read_csv(here::here("data", "data_processed",
+                                        "handcoded_survey_stuff",
+                                        "other_issues.csv")) %>%
   select(ResponseID, Q3.2.manual)
 
-missing.issues.raw <- read_csv(file.path(PROJHOME, "Data", "data_processed",
-                                         "handcoded_survey_stuff",
-                                         "missing_issues.csv")) %>%
+missing.issues.raw <- read_csv(here::here("data", "data_processed",
+                                          "handcoded_survey_stuff",
+                                          "missing_issues.csv")) %>%
   select(ResponseID, Q3.2.manual)
 
 other.issues.all <- bind_rows(other.issues.raw, missing.issues.raw)
@@ -778,13 +781,13 @@ main.issue.clean %>%
   summarise(num = n()) %>%
   ungroup() %>% arrange(desc(num)) %>%
   mutate(potential.contentiousness = "") %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
-                      "handcoded_survey_stuff",
-                      "contentiousness_WILL_BE_OVERWRITTEN.csv"))
+  write_csv(here::here("data", "data_processed",
+                       "handcoded_survey_stuff",
+                       "contentiousness_WILL_BE_OVERWRITTEN.csv"))
 
-contentiousness <- read_csv(file.path(PROJHOME, "Data", "data_processed",
-                                      "handcoded_survey_stuff",
-                                      "contentiousness.csv")) %>%
+contentiousness <- read_csv(here::here("data", "data_processed",
+                                       "handcoded_survey_stuff",
+                                       "contentiousness.csv")) %>%
   select(Q3.2.clean, potential.contentiousness) %>%
   mutate(potential.contentiousness = factor(potential.contentiousness,
                                             levels=c("Low", "High"),
@@ -811,12 +814,12 @@ survey.orgs.clean.final %>%
   mutate(is.num = !str_detect(Q3.4, "[^0-9\\.,]"),
          Q3.4.num.manual = 0) %>%
   filter(is.num == FALSE) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "employees_count_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-employees.clean <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+employees.clean <- read_csv(here::here("data", "data_processed",
                                       "handcoded_survey_stuff",
                                       "employees_count.csv")) %>%
   select(ResponseID, Q3.4.num.manual)
@@ -838,12 +841,12 @@ survey.orgs.clean.final %>%
   mutate(is.num = !str_detect(Q3.5, "[^0-9\\.,]"),
          Q3.5.num.manual = 0) %>%
   filter(is.num == FALSE) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "volunteers_count_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-volunteers.clean <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+volunteers.clean <- read_csv(here::here("data", "data_processed",
                                        "handcoded_survey_stuff",
                                        "volunteers_count.csv")) %>%
   select(ResponseID, Q3.5.num.manual)
@@ -868,12 +871,12 @@ survey.orgs.clean.final %>%
   filter(!is.na(Q3.6_other_TEXT)) %>%
   select(ResponseID, Q3.6_other_TEXT) %>%
   mutate(Q3.6_other.manual = "") %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "collaborations_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-collaborations.clean.raw <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+collaborations.clean.raw <- read_csv(here::here("data", "data_processed",
                                                "handcoded_survey_stuff",
                                                "collaborations.csv")) %>%
   select(ResponseID, Q3.6_other.manual)
@@ -912,7 +915,7 @@ survey.orgs.clean.final %>%
   filter(!is.na(Q3.8_other_TEXT)) %>%
   select(ResponseID, Q3.8_other_TEXT) %>%
   mutate(Q3.8_other.manual = "") %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "funding_WILL_BE_OVERWRITTEN.csv"))
 
@@ -929,7 +932,7 @@ funding.not.others <- survey.orgs.clean.final %>%
   filter(!(value %in% c("Not applicable", "Don't know")))
 
 # Read in clean CSV
-funding.clean.raw <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+funding.clean.raw <- read_csv(here::here("data", "data_processed",
                                         "handcoded_survey_stuff",
                                         "funding.csv")) %>%
   select(ResponseID, Q3.8_other.manual)
@@ -971,7 +974,7 @@ funding.clean.num <- funding.clean %>%
 
 funding.clean <- funding.clean %>%
   left_join(funding.clean.num, by="ResponseID") %>%
-  nest(key, value, .key = "Q3.8")
+  nest(Q3.8 = c(key, value))
 
 
 # --------------------------------------
@@ -998,12 +1001,12 @@ survey.countries.clean %>%
   select(ResponseID, loop.number, Q4.5_TEXT) %>%
   filter(!is.na(Q4.5_TEXT)) %>%
   mutate(Q4.5.manual = 0) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "frequency_govt_contact_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-govt.freq.clean <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+govt.freq.clean <- read_csv(here::here("data", "data_processed",
                                        "handcoded_survey_stuff",
                                        "frequency_govt_contact.csv")) %>%
   select(ResponseID, loop.number, Q4.5.manual)
@@ -1039,12 +1042,12 @@ survey.countries.clean %>%
   select(ResponseID, loop.number, Q4.8_TEXT) %>%
   filter(!is.na(Q4.8_TEXT)) %>%
   mutate(Q4.8.manual = 0) %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
+  write_csv(here::here("data", "data_processed",
                       "handcoded_survey_stuff",
                       "frequency_govt_report_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-govt.freq.report.clean <- read_csv(file.path(PROJHOME, "Data", "data_processed",
+govt.freq.report.clean <- read_csv(here::here("data", "data_processed",
                                              "handcoded_survey_stuff",
                                              "frequency_govt_report.csv")) %>%
   select(ResponseID, loop.number, Q4.8.manual)
@@ -1092,8 +1095,12 @@ reactions <- survey.countries.clean %>%
 # -------------------------
 # --------------------------------------------------
 # CSRE-related data
-full.data <- readRDS(file.path(PROJHOME, "Data", "data_processed",
-                               "full_data.rds"))
+#
+# 2023 note: This .rds file is created with Data/R/clean_merge_data.R in my
+# original dissertation repository. That's a massive 1200-lines-of-code file
+# that I don't want to reproduce and clean here, so I just copied the
+# full_data.rds file to this project in data/data_raw
+full.data <- readRDS(here::here("data", "data_raw", "full_data.rds"))
 
 # Get most recent CSRE, average CSRE over past 10 years, gwf.ever.autocracy,
 # most recent Polity, average Polity over past 10 years
@@ -1125,23 +1132,23 @@ cows.no.regime.type <- external.data %>%
   filter(no.gwf) %>%
   distinct(cowcode)
 
-cows.in.survey.not.in.vdem <- data_frame(cowcode = cows.all.survey) %>%
+cows.in.survey.not.in.vdem <- tibble(cowcode = cows.all.survey) %>%
   filter(!(cowcode %in% cows.in.external$cowcode)) %>% na.omit()
 
 cows.missing <- c(cows.no.regime.type$cowcode, cows.in.survey.not.in.vdem$cowcode)
 
 # Determine these by hand based on Freedom House and Polity scores:
-data_frame(cowcode = cows.missing) %>%
+tibble(cowcode = cows.missing) %>%
   mutate(country_name = countrycode(cowcode, "cown", "country.name")) %>%
   mutate(autocracy = "", reason = "") %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
-                      "handcoded_survey_stuff",
-                      "manual_regime_types_WILL_BE_OVERWRITTEN.csv"))
+  write_csv(here::here("data", "data_processed",
+                       "handcoded_survey_stuff",
+                       "manual_regime_types_WILL_BE_OVERWRITTEN.csv"))
 
 # Read in clean CSV
-manual.regime.types <- read_csv(file.path(PROJHOME, "Data", "data_processed",
-                                          "handcoded_survey_stuff",
-                                          "manual_regime_types.csv")) %>%
+manual.regime.types <- read_csv(here::here("data", "data_processed",
+                                           "handcoded_survey_stuff",
+                                           "manual_regime_types.csv")) %>%
   select(cowcode, autocracy.manual = autocracy)
 
 # Summarize external variables from V-Dem (captures most countries in survey)
@@ -1190,15 +1197,22 @@ randomly <- function(x) {
   sample(xtfrm(x))
 }
 
+# 2023 note: The seed algorithm changed starting with R 3.6; 
+# sample.kind = "Rounding" uses the older algorithm
 clean.ids <- survey.orgs.clean.final %T>%
-  {set.seed(1234)} %>%
+  {set.seed(1234, sample.kind = "Rounding")} %>%
+  # {set.seed(1234)} %>%
   distinct(ResponseID) %>%
   arrange(randomly(ResponseID)) %>%
   mutate(clean.id = as.integer(seq(from=sample(1000:2000, 1),
                                    length.out=n()))) %T>%
-  write_csv(., file.path(PROJHOME, "Data", "Survey", 
-                         "raw_data", "clean_ids.csv"))
+  write_csv(., here::here("data", "data_processed", "clean_ids.csv"))
 
+# 2023 note: But also relying on this random shuffling to create static
+# permanent clean IDs seems really fragile now, so I'm going to copy the
+# dissertation version of clean_ids.csv to data/data_raw/clean_ids.csv and use
+# that instead. The clean.ids code above is here for the sake of documentation.
+clean.ids <- read_csv(here::here("data", "data_raw", "clean_ids.csv"))
 
 # Merge in hand-coded and external data
 survey.orgs.clean.final.for.realz <- survey.orgs.clean.final %>%
@@ -1233,13 +1247,13 @@ survey.orgs.clean.final.for.realz %>%
   arrange(clean.id) %>%
   select(clean.id, Q3.12) %>%
   mutate(obstacle = "") %>%
-  write_csv(file.path(PROJHOME, "Data", "data_processed",
-                      "handcoded_survey_stuff",
-                      "obstacles_WILL_BE_OVERWRITTEN.csv"))
+  write_csv(here::here("data", "data_processed",
+                       "handcoded_survey_stuff",
+                       "obstacles_WILL_BE_OVERWRITTEN.csv"))
 
-obstacles.coded <- read_csv(file.path(PROJHOME, "Data", "data_processed",
-                                      "handcoded_survey_stuff",
-                                      "obstacles.csv")) %>%
+obstacles.coded <- read_csv(here::here("data", "data_processed",
+                                       "handcoded_survey_stuff",
+                                       "obstacles.csv")) %>%
   select(clean.id, Q3.12_obstacle = obstacle)
 
 survey.orgs.clean.final.for.realz <- survey.orgs.clean.final.for.realz %>%
@@ -1256,21 +1270,21 @@ survey.clean.all <- survey.orgs.clean.final.for.realz %>%
 # Save all these things!
 # --------------------------
 saveRDS(survey.orgs.all,
-        file=file.path(PROJHOME, "Data", "data_processed",
-                       "survey_orgs_all.rds"))
+        file=here::here("data", "data_processed",
+                        "survey_orgs_all.rds"))
 
 saveRDS(partials.clean,
-        file=file.path(PROJHOME, "Data", "data_processed",
-                       "survey_partials.rds"))
+        file=here::here("data", "data_processed",
+                        "survey_partials.rds"))
 
 saveRDS(survey.clean.all,
-        file=file.path(PROJHOME, "Data", "data_processed",
-                       "survey_clean_all.rds"))
+        file=here::here("data", "data_processed",
+                        "survey_clean_all.rds"))
 
 saveRDS(survey.orgs.clean.final.for.realz, 
-        file=file.path(PROJHOME, "Data", "data_processed", 
-                       "survey_orgs_clean.rds"))
+        file=here::here("data", "data_processed", 
+                        "survey_orgs_clean.rds"))
 
 saveRDS(survey.countries.clean.for.realz, 
-        file=file.path(PROJHOME, "Data", "data_processed", 
-                       "survey_countries_clean.rds"))
+        file=here::here("data", "data_processed", 
+                        "survey_countries_clean.rds"))
